@@ -14,8 +14,8 @@
 // Request  POST { mode: 'chat'|'wiser'|'journal', context: string, messages: [{role, content}] }
 // Response 200 { text, provider: 'gemini'|'groq' }   |   503 { error } when both fail
 
-const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-2.5-flash'
-const GROQ_MODEL   = () => process.env.GROQ_MODEL   || 'llama-3.3-70b-versatile'
+const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-3.8-flash'
+const GROQ_MODEL   = () => process.env.GROQ_MODEL   || 'llama-3.1-8b-instant'
 
 const MAX_MESSAGES = 14
 const MAX_MSG_CHARS = 1500
