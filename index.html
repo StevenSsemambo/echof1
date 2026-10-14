@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f0a05" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="ECHO" />
+    <meta name="description" content="A companion that learns who you are and becomes a wiser reflection of you." />
+
+    <!-- Apple touch icons -->
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="ECHO — Your Wiser Self" />
+    <meta property="og:description" content="A companion that learns who you are and becomes a wiser reflection of you." />
+    <meta property="og:type" content="website" />
+
+    <title>ECHO</title>
+
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body, #root { height: 100%; min-height: 100svh; }
+      body {
+        background: #0f0a05;
+        color: #e8e4dc;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        overscroll-behavior: none;
+        overflow: hidden;
+      }
+      #root { overflow: hidden; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
