@@ -5,8 +5,8 @@
 // Env vars (Netlify → Site settings → Environment variables):
 //   GEMINI_API_KEY   required   https://aistudio.google.com/apikey
 //   GROQ_API_KEY     required   https://console.groq.com/keys
-//   GEMINI_MODEL     optional   default: gemini-2.5-flash
-//   GROQ_MODEL       optional   default: llama-3.3-70b-versatile
+//   GEMINI_MODEL     optional   comma-separated, default: gemini-3.8-flash,gemini-2.5-flash
+//   GROQ_MODEL       optional   comma-separated, default: openai/gpt-oss-120b,openai/gpt-oss-20b
 //   GEMINI_TIMEOUT_MS optional  default: 8000
 //   GROQ_TIMEOUT_MS   optional  default: 8000
 //   ALLOWED_ORIGIN   optional   e.g. https://your-site.netlify.app (blocks other sites)
@@ -14,8 +14,11 @@
 // Request  POST { mode: 'chat'|'wiser'|'journal', context: string, messages: [{role, content}] }
 // Response 200 { text, provider: 'gemini'|'groq' }   |   503 { error } when both fail
 
-const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-3.8-flash'
-const GROQ_MODEL   = () => process.env.GROQ_MODEL   || 'llama-3.1-8b-instant'
+// Model names change often (Groq retired llama-3.3-70b-versatile on 2026-08-16).
+// Each var accepts a comma-separated list, tried in order if a model is unavailable (404/400).
+const list = (v, dflt) => (v || dflt).split(',').map(x => x.trim()).filter(Boolean)
+const GEMINI_MODELS = () => list(process.env.GEMINI_MODEL, 'gemini-3.8-flash,gemini-2.5-flash')
+const GROQ_MODELS   = () => list(process.env.GROQ_MODEL,   'openai/gpt-oss-120b,openai/gpt-oss-20b')
 
 const MAX_MESSAGES = 14
 const MAX_MSG_CHARS = 1500
@@ -87,11 +90,18 @@ async function fetchWithTimeout(url, init, ms) {
   }
 }
 
+async function httpError(provider, model, res) {
+  let body = ''
+  try { body = (await res.text()).slice(0, 180).replace(/\s+/g, ' ') } catch {}
+  const err = new Error(`${provider} ${model} HTTP ${res.status} ${body}`.trim())
+  err.status = res.status
+  return err
+}
+
 // ── PROVIDERS ──────────────────────────────────────────────────────────────
-async function callGemini(system, messages) {
+async function callGemini(system, messages, model) {
   const key = process.env.GEMINI_API_KEY
   if (!key) throw new Error('GEMINI_API_KEY not set')
-  const model = GEMINI_MODEL()
 
   const body = {
     systemInstruction: { parts: [{ text: system }] },
@@ -99,7 +109,7 @@ async function callGemini(system, messages) {
       role: m.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: m.content }],
     })),
-    generationConfig: { temperature: 0.9, topP: 0.95, maxOutputTokens: 400 },
+    generationConfig: { temperature: 0.9, topP: 0.95, maxOutputTokens: 1200 },
   }
   // 2.5 Flash "thinks" by default and thinking tokens eat the output budget; chat doesn't need it.
   if (/2\.5-flash/.test(model) && process.env.GEMINI_THINKING !== 'on') {
@@ -115,7 +125,7 @@ async function callGemini(system, messages) {
     },
     Number(process.env.GEMINI_TIMEOUT_MS) || 8000,
   )
-  if (!res.ok) throw new Error(`Gemini HTTP ${res.status}`)
+  if (!res.ok) throw await httpError('Gemini', model, res)
   const data = await res.json()
   const cand = data?.candidates?.[0]
   const text = (cand?.content?.parts || []).map(p => p.text || '').join('').trim()
@@ -123,7 +133,7 @@ async function callGemini(system, messages) {
   return text
 }
 
-async function callGroq(system, messages) {
+async function callGroq(system, messages, model) {
   const key = process.env.GROQ_API_KEY
   if (!key) throw new Error('GROQ_API_KEY not set')
 
@@ -133,16 +143,18 @@ async function callGroq(system, messages) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
       body: JSON.stringify({
-        model: GROQ_MODEL(),
+        model,
         messages: [{ role: 'system', content: system }, ...messages],
         temperature: 0.9,
         top_p: 0.95,
-        max_tokens: 400,
+        max_tokens: 1200,
+        // gpt-oss models "think" first; keep it short so the budget goes to the reply
+        ...(model.startsWith('openai/gpt-oss') ? { reasoning_effort: 'low' } : {}),
       }),
     },
     Number(process.env.GROQ_TIMEOUT_MS) || 8000,
   )
-  if (!res.ok) throw new Error(`Groq HTTP ${res.status}`)
+  if (!res.ok) throw await httpError('Groq', model, res)
   const data = await res.json()
   const text = data?.choices?.[0]?.message?.content?.trim()
   if (!text) throw new Error('Groq empty response')
@@ -182,14 +194,20 @@ export default async (req) => {
   const system = buildSystem(mode, context)
   const errors = []
 
-  for (const [provider, fn] of [['gemini', callGemini], ['groq', callGroq]]) {
-    try {
-      const text = tidy(await fn(system, messages))
-      if (text) return json({ text, provider })
-    } catch (err) {
-      const reason = err.name === 'AbortError' ? 'timeout' : err.message
-      errors.push(`${provider}: ${reason}`)
-      console.warn(`[ECHO ai] ${provider} failed — ${reason}`)
+  const providers = [['gemini', callGemini, GEMINI_MODELS()], ['groq', callGroq, GROQ_MODELS()]]
+  for (const [provider, fn, models] of providers) {
+    for (const model of models) {
+      try {
+        const text = tidy(await fn(system, messages, model))
+        if (text) return json({ text, provider, model })
+      } catch (err) {
+        const timedOut = err.name === 'AbortError'
+        const reason = timedOut ? `${provider} ${model} timeout` : err.message
+        errors.push(reason)
+        console.warn(`[ECHO ai] ${reason}`)
+        // Rate-limited or slow → switch provider. Model missing/bad (404/400/empty) → try next model.
+        if (timedOut || err.status === 429 || err.status === 401 || err.status === 403) break
+      }
     }
   }
   return json({ error: 'all providers failed', detail: errors }, 503)
