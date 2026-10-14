@@ -41,7 +41,11 @@ export async function askAI({ mode = 'chat', context = '', messages }) {
       }),
       signal: ctrl.signal,
     })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    if (!res.ok) {
+      let detail = ''
+      try { detail = JSON.stringify((await res.json()).detail || '') } catch {}
+      throw new Error(`HTTP ${res.status} ${detail}`)
+    }
     const data = await res.json()
     if (!data?.text) throw new Error('empty')
     _lastProvider = data.provider || null
